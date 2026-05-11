@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+cd "$PROJECT_ROOT"
+
+# Git-Sync-Check
+if git rev-parse --git-dir &>/dev/null; then
+  git fetch origin --quiet 2>/dev/null || true
+  BEHIND=$(git rev-list --count HEAD..origin/main 2>/dev/null || echo "0")
+  if [[ "$BEHIND" -gt 0 ]]; then
+    echo "Remote hat $BEHIND neuere Commits. Pullen? (j/n)"
+    read -r ANSWER
+    [[ "$ANSWER" == "j" ]] && git pull --ff-only origin main
+  fi
+fi
+
+ROLE="${1:-andi}"
+shift 2>/dev/null || true
+STARTER_PROMPT=$(cat "$SCRIPT_DIR/starter-${ROLE}.md" 2>/dev/null || echo "Sessionstart: Lies project-status.md und lessons.md. Brief den User.")
+exec claude --system-prompt-file "$PROJECT_ROOT/main-agent.md" "$@" "$STARTER_PROMPT"
