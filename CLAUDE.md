@@ -7,6 +7,7 @@ Klaert Auftrags-Parameter, baut Capability-Cost-Map, entwickelt PoCs.
 
 `knowledge/skadi-pipeline.md` — C#-Pipeline-Architektur, Decision-Gates, bekannte Issues.
 `knowledge/dsgvo-doku-verarbeitung.md` — Grundregeln lokal vs. cloud, Anwaltsgeheimnis.
+`knowledge/stakeholder-kontext.md` — Wer ist wer: Algron-Team, Kanzlei Voigt, Entscheidungsstruktur.
 `lessons.md` — Methodische Erkenntnisse. Bei Sessionstart lesen.
 
 ## Projektstruktur
