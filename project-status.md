@@ -4,68 +4,110 @@
 
 - 2026-05-11: Phase 0 gestartet. Stakeholder-Kontext, Research, Henrik-Gespraech.
 - 2026-05-12: Henrik-Gespraech gefuehrt. Auftrag und Deliverable geklaert.
+- 2026-05-12: Erster PoC (spaCy + Regex). Lief auf synthetischen Daten.
+- 2026-05-12: Test mit echten Kanzlei-Dokumenten: Regex-Ansatz regressioniert → STOP.
+- 2026-05-12: Pivot zu **Presidio** (Microsoft, Open Source). Bessere Context-Scoring, Custom Recognizer.
+- 2026-05-12: Web-Dashboard gebaut (FastAPI + Jinja2). Live unter http://77.42.39.93:8081/
+- 2026-05-13: Auto-Evaluate via Ollama + Qwen3-8B implementiert. Laeuft ueber Reverse-SSH-Tunnel.
+- 2026-05-13: **Iterations-Architektur** gebaut. FP-Audit laeuft jetzt auf aktuelle Iteration (6 Runs), nicht alle historischen. Vergleichstabelle auf /fp-audit. Altdaten archiviert (pdfs_legacy_v0/).
+- 2026-05-13: Baseline gemessen: LOCATION 77%, ORGANIZATION 66%, PERSON 51% FP-Rate. Naechster Schritt: Presidio-Threshold-Tuning.
+
+## Kernentscheidungen
 
 **Deliverable:** Docker API-Service. Input: PDF (auch gescannt). Output: geschwaerzter Text, Claude-kompatibel. [W]
-**Tech-Richtung:** Open Source, kein eigenes LLM noetig. Regex + spaCy + Tesseract auf CPU reicht. [W]
-**Mimir:** Overkill fuer diesen Use-Case (Gemma 4, RTX 6000, 96GB). Wird nicht benoetigt. [W]
-**Kosten-Ziel:** Weg von ~1000 EUR/Monat GPU. Hetzner-Server (250 EUR/Monat oder weniger). Kanzlei-Chef vergleicht mit 20 EUR/User/Jahr SaaS (Halbwissen). [W]
+**PII-Engine:** Presidio + spaCy de_core_news_lg + 9 Custom Recognizer (Kanzlei-spezifisch). [W]
+**Mimir:** Overkill fuer diesen Use-Case. Wird nicht benoetigt. [W]
+**Kosten-Ziel:** Weg von ~1000 EUR/Monat GPU. Hetzner-Server (250 EUR/Monat oder weniger). [W]
 **Fehlertoleranz:** Max 3%. [W]
 **Deadline:** 1 Woche — 1 Kategorie integriert und ausprobierbar. [W]
+**DSGVO-Constraint:** Echte Kanzlei-Daten bleiben auf Server. Claude darf sie nicht sehen. [W]
 
-**Dokumenttypen vom Kanzlei-Chef (Prioritaet):**
+**Dokumenttypen (Prioritaet):**
 - Schreiben der Versicherer
 - Schriftsaetze aus Gerichtsverfahren
 - Gutachten
 - Reparatur- und andere Abrechnungen
 - (Eigene Rechnungen NICHT im Fokus)
-Kontext: Vermutlich Verkehrs-/Versicherungsrecht. [A]
+Kontext: Verkehrs-/Versicherungsrecht. [A]
 
-**PII-Kategorien (abgeleitet):**
-Namen, Adressen, Aktenzeichen, Gesundheitsdaten (Gutachten!), Versicherungsnummern, Finanzdaten. [A]
+## Tech-Stack (aktuell)
 
-**DSGVO-Constraint:** Test-Dokumente von Kanzlei enthalten sensitive Daten — duerfen nicht von Claude gelesen werden. PoC wird mit synthetischen Daten gebaut, Validierung gegen echte Daten erfolgt lokal durch Andi. [W]
+| Komponente | Technologie | Status |
+|------------|------------|--------|
+| PDF-Extraktion | PyMuPDF + Tesseract OCR | Laeuft [W] |
+| PII-Erkennung | Presidio + spaCy de_core_news_lg | Laeuft, FP-Problem [W] |
+| Web-Dashboard | FastAPI + Jinja2 + Vanilla JS | Laeuft [W] |
+| Auto-Eval | Ollama + Qwen3-8B auf Andis Laptop | Gebaut, Test steht aus [W] |
+| Persistence | JSON-Dateien (runs.json, evaluations.json) | Laeuft [W] |
+| Server | Hetzner 8GB RAM, 4 CPU | Laeuft [W] |
 
-**Infrastruktur:** Hetzner-Server (8GB RAM, 4 CPU-Kerne) — reicht fuer PoC-Stack. [W]
+## Bekannte Probleme
 
-**Research abgeschlossen:** Regex+NER-Pipeline → `knowledge/regex-ner-pii-deutsch.md`. Presidio + spaCy/Flair als Optionen identifiziert. [W]
+1. **False Positives**: Presidio erkennt zu viel als PII — Formular-Labels, Fachbegriffe. Hauptproblem. [W]
+2. **OCR-Zeilenumbrueche**: PyMuPDF uebernimmt PDF-Layout-Umbrueche in den Text. Post-Processing fehlt. [W]
+3. **Alte Runs ohne Rohdaten**: Vor 2026-05-13 erstellte Testlaeufe haben keine Text+Entity-Dateien. Neu testen noetig fuer Auto-Eval. [W]
 
 ## Offene Auftrags-Parameter
 
 Geklaert:
 - [x] Haupt-Use-Case: Schwaerzung als Docker API-Service. [W]
 - [x] Fehlertoleranz: Max 3%. [W]
-- [x] Dokumenttypen: Liste vom Kanzlei-Chef (siehe oben). [W]
-- [x] Zeitrahmen: 1 Woche fuer erste Kategorie, dann inkrementell. [W]
-- [x] Kostenmodell: An Kanzlei weitergereicht, muss begruendbar sein. [W]
-- [x] Mimir: Overkill, wird nicht benoetigt. [W]
+- [x] Dokumenttypen: Liste vom Kanzlei-Chef. [W]
+- [x] Zeitrahmen: 1 Woche fuer erste Kategorie. [W]
+- [x] Kostenmodell: An Kanzlei weitergereicht. [W]
+- [x] Mimir: Overkill, nicht benoetigt. [W]
 - [x] Deployment: Docker. [W]
 
 Noch offen:
-- [ ] Volumen (Dokumente pro Tag/Monat) — noch nicht geklaert, kein Blocker fuer PoC.
+- [ ] Volumen (Dokumente pro Tag/Monat) — kein Blocker fuer PoC.
 - [ ] Anteil gescannt vs. digital — finden wir beim Testen raus.
-- [ ] Aktenzeichen-Format Voigt — brauchen wir fuer Regex, aber nicht fuer erste Kategorie.
-- [ ] Tabellen/Rechnungen konkreter Zweck — kein Blocker, erstmal Standard-PDFs.
+- [ ] Aktenzeichen-Format Voigt — brauchen wir fuer Regex-Tuning.
 
-## Letzte Henrik-Sync-Punkte
+## Dashboard-Architektur
 
-- 2026-05-11: Erstes Scoping vorbereitet → `strategie-sync-2026-05-11.md`
-- 2026-05-12: Henrik-Gespraech gefuehrt → `henrik-prep-2026-05-11.md` (mit Antworten)
-  Geklaert: Deliverable, Fehlertoleranz, Dokumenttypen, Deadline, Mimir-Richtung.
+```
+dashboard/
+  app.py              # FastAPI Routes (~15 Endpoints)
+  engine.py           # Wraps test_lokal.py, Analyzer-Singleton
+  evaluator.py        # Auto-Eval: Prompt + Ollama-Call + Parsing (experimentell)
+  fp_auditor.py       # FP-Audit: TP/FP-Klassifikation pro Entity via LLM
+  store.py            # JSON-Persistence (PDF-zentriert + Iterationen)
+  models.py           # Pydantic: TestRun, Iteration, FpAudit, Evaluation, DocumentType
+  templates/          # 7 Jinja2-Templates
+  static/             # CSS + JS
+  data/
+    index.json                    # Run-Index: id -> pdf_slug + Metadaten
+    iterations.json               # Iteration-Metadaten inkl. fp_summary
+    pdfs/
+      {pdf-slug}/runs/{run-id}/   # run.json, text.txt, entities.json, *.html
+    pdfs_legacy_v0/               # Archivierte Altdaten (vor Iterations-Umbau)
+```
 
-## PoC-Ergebnisse
+## Auto-Eval-Architektur
 
-- **PyMuPDF Textextraktion:** Funktioniert. OCR-Issue 2 (Fehlzuendung bei Vektor-PDFs) tritt nicht auf. → `knowledge/poc-pymupdf-2026-05-12.md`
-- **spaCy NER Deutsch (Hybrid):** spaCy allein hat Luecke bei Anwalts-Kontext (~21% FN-Rate). Mit Regex-Fallback: **100% Recall, 0% False Negatives** auf synthetischen Schriftsaetzen. → `knowledge/poc-spacy-ner-2026-05-12.md`
-- Code: `scripts/poc/pymupdf_extract.py`, `batch_test.py`, `spacy_ner_*.py`
+```
+[Dashboard auf Hetzner] --localhost:11434--> [Reverse-SSH-Tunnel] --> [Andis Laptop: Ollama + Qwen3-8B]
+```
+
+Prompt schickt: Originaltext + Entity-Liste mit Kontext.
+Qwen3 bewertet: TP/FP pro Entity, findet FN, fuellt Checkliste, gibt Verdict.
+Ergebnis: Evaluation-Objekt (gleiche Struktur wie manuelle Bewertung).
 
 ## Naechste Schritte
 
-1. FastAPI-Endpoint + Docker — Service zusammenbauen
-2. Andi validiert lokal gegen echte Kanzlei-Dokumente
-3. Messen gegen 3%-Schwelle
-4. Weitere PII-Kategorien (Adressen, IBAN, Aktenzeichen)
+1. **Server neu starten** (uvicorn) — Iterations-Architektur aktivieren
+2. **Presidio Threshold-Tuning**: score_threshold in test_lokal.py von ~0.35 auf 0.5-0.6 anpassen
+3. **Erste saubere Iteration**: Batch-Test mit Konfig-Notiz "threshold=0.6" starten, dann Batch-FP-Audit
+4. **Baseline vergleichen**: Neue FP-Raten vs. alte Baseline (LOCATION 77%, ORG 66%, PERSON 51%)
+5. **Iterieren** bis FP-Raten akzeptabel (Ziel: <25% fuer Haupt-Typen)
+
+## Letzte Henrik-Sync-Punkte
+
+- 2026-05-12: Henrik-Gespraech → Deliverable, Fehlertoleranz, Dokumenttypen, Deadline geklaert.
 
 ## Build-Notizen
 
-Team erstellt: 2026-05-11. Hetzner-Server: 8GB RAM, 4 Kerne.
-PoC-Stack: PyMuPDF + Tesseract + spaCy + FastAPI + Docker. Kein LLM noetig.
+- Team erstellt: 2026-05-11. Hetzner-Server: 8GB RAM, 4 Kerne.
+- Dashboard: uvicorn auf Port 8081 (8080 war belegt)
+- Presidio Analyzer: ~600MB RAM beim Start, ~5s Ladezeit
+- Ollama auf Laptop: Qwen3-8B Q4_K_M, braucht ~5GB VRAM

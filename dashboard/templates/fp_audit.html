@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block title %}FP-Audit{% endblock %}
+
+{% block content %}
+<h1>FP-Audit — Iterations-Vergleich</h1>
+<p class="subtitle">
+  Jede Iteration = 1 Batch-Test + 1 Batch-FP-Audit. LLM klassifiziert erkannte Entities als TP / FP.
+  Ziel: FP-Rate-Entwicklung ueber Presidio-Tuning-Iterationen verfolgen.
+</p>
+
+{% set latest = iterations[-1] if iterations else None %}
+
+{% if not iterations %}
+<div class="info-box">
+  Noch keine Iterationen vorhanden. Starte zuerst einen Batch-Test unter
+  <a href="/batch">Batch-Test</a>.
+</div>
+
+{% else %}
+
+<!-- Vergleichstabelle -->
+{% set has_summary = iterations | selectattr("fp_summary") | list %}
+
+{% if has_summary %}
+<h2 style="margin-top:20px; margin-bottom:8px;">Iterations-Vergleich</h2>
+<div style="overflow-x:auto;">
+<table class="history-table">
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Zeitpunkt</th>
+      <th>Konfig-Notiz</th>
+      {% for t in sorted_types %}
+      <th>{{ t }}</th>
+      {% endfor %}
+      <th>Gesamt-FP%</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for it in iterations | reverse %}
+    {% if it.fp_summary %}
+    <tr>
+      <td style="font-size:12px; color:#888;">{{ loop.index }}</td>
+      <td style="font-size:12px; color:#666; white-space:nowrap;">{{ it.started_at.strftime('%d.%m.%Y %H:%M') }}</td>
+      <td>{{ it.config_note or '—' }}</td>
+      {% for t in sorted_types %}
+        {% set by_type = it.fp_summary.get("by_type", {}) %}
+        {% set info = by_type.get(t) %}
+        {% if info %}
+          {% set rate = info.fp_rate_pct %}
+          <td>
+            <span class="badge {% if rate >= 50 %}badge-bad{% elif rate >= 25 %}badge-warn{% else %}badge-ok{% endif %}">
+              {{ rate }}%
+            </span>
+            <span style="font-size:11px; color:#888;">({{ info.fp }}/{{ info.total }})</span>
+          </td>
+        {% else %}
+          <td style="color:#ccc;">—</td>
+        {% endif %}
+      {% endfor %}
+      <td>
+        {% set total_rate = it.fp_summary.get("fp_rate_pct", 0) %}
+        <span class="badge {% if total_rate >= 50 %}badge-bad{% elif total_rate >= 25 %}badge-warn{% else %}badge-ok{% endif %}">
+          {{ total_rate }}%
+        </span>
+        <span style="font-size:11px; color:#888;">({{ it.fp_summary.get("total_fp") }}/{{ it.fp_summary.get("total_entities") }})</span>
+      </td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<div class="info-box" style="margin-top:16px;">
+  Noch kein FP-Audit abgeschlossen. Starte den Batch-FP-Audit fuer die aktuelle Iteration.
+</div>
+{% endif %}
+
+<!-- Iterationen ohne FP-Summary: Status-Tabelle -->
+{% set pending_iters = iterations | rejectattr("fp_summary") | list %}
+{% if pending_iters %}
+<h2 style="margin-top:28px; margin-bottom:8px;">Offene Iterationen</h2>
+<table class="history-table">
+  <thead>
+    <tr><th>Zeitpunkt</th><th>Konfig-Notiz</th><th>Status</th><th>Runs</th></tr>
+  </thead>
+  <tbody>
+    {% for it in pending_iters | reverse %}
+    <tr>
+      <td style="font-size:12px; color:#666;">{{ it.started_at.strftime('%d.%m.%Y %H:%M') }}</td>
+      <td>{{ it.config_note or '—' }}</td>
+      <td>
+        <span class="badge {% if it.status == 'done' %}badge-ok{% elif it.status == 'running' %}badge-warn{% else %}badge-bad{% endif %}">
+          {{ it.status }}
+        </span>
+      </td>
+      <td>{{ it.run_ids | length }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% endif %}
+
+<!-- Aktionsleiste -->
+<div class="form-actions" style="margin-top:24px;">
+  {% if latest and latest.status == 'done' and not latest.fp_summary %}
+  <button class="btn btn-primary" id="audit-btn" onclick="startFpAudit(event, this)">
+    Batch-FP-Audit starten (neueste Iteration)
+  </button>
+  {% elif latest and latest.fp_summary %}
+  <span style="font-size:13px; color:#666; margin-right:12px;">
+    Neueste Iteration hat FP-Audit. Neuen Batch-Test starten fuer weitere Iteration.
+  </span>
+  {% endif %}
+  <a href="/batch" class="btn">Batch-Test</a>
+  <a href="/history" class="btn">Verlauf</a>
+</div>
+
+<div id="audit-status" class="info-box" style="display:none; margin-top:12px;"></div>
+
+<script>
+async function startFpAudit(e, btn) {
+  e.preventDefault();
+  btn.disabled = true;
+  btn.textContent = 'Laeuft...';
+  document.getElementById('audit-status').style.display = 'block';
+  document.getElementById('audit-status').textContent = 'Starte FP-Audit...';
+
+  try {
+    var resp = await fetch('/batch/fp-audit', {method: 'POST'});
+    var data = await resp.json();
+    if (!data.ok) {
+      document.getElementById('audit-status').textContent = 'Fehler: ' + data.error;
+      btn.disabled = false;
+      btn.textContent = 'Batch-FP-Audit starten (neueste Iteration)';
+      return;
+    }
+    document.getElementById('audit-status').textContent = data.count + ' Runs in der Warteschlange...';
+    pollFpAudit(btn);
+  } catch(err) {
+    document.getElementById('audit-status').textContent = 'Netzwerk-Fehler: ' + err;
+    btn.disabled = false;
+  }
+}
+
+function pollFpAudit(btn) {
+  fetch('/batch/status')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var el = document.getElementById('audit-status');
+      if (d.running) {
+        el.textContent = '(' + d.done + '/' + d.total + ') ' + (d.current || '...');
+        setTimeout(function() { pollFpAudit(btn); }, 3000);
+      } else {
+        el.textContent = 'Fertig — ' + d.done + ' Audits abgeschlossen.';
+        if (d.errors && d.errors.length > 0) {
+          el.textContent += ' Fehler: ' + d.errors.join('; ');
+        }
+        setTimeout(function() { window.location.reload(); }, 2000);
+      }
+    })
+    .catch(function(err) {
+      document.getElementById('audit-status').textContent = 'Status-Fehler: ' + err;
+      setTimeout(function() { pollFpAudit(btn); }, 5000);
+    });
+}
+</script>
+{% endblock %}

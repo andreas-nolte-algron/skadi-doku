@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+{% block title %}Batch-Test{% endblock %}
+
+{% block content %}
+<h1>Batch-Test</h1>
+<p class="subtitle">Alle PDFs aus dem Manifest verarbeiten. Jeder Lauf ist eine Iteration mit eigener Konfig-Notiz.</p>
+
+{% if not manifest_exists %}
+<div class="error-box">
+  <strong>Manifest nicht gefunden:</strong> test-files/manifest.json fehlt.
+</div>
+{% elif not manifest %}
+<div class="error-box">
+  <strong>Manifest leer</strong> — keine PDFs konfiguriert.
+</div>
+{% else %}
+
+<div class="test-form">
+  <h2>{{ manifest|length }} PDFs im Manifest</h2>
+  <table class="history-table" style="margin-top:12px;">
+    <thead>
+      <tr><th>#</th><th>Datei</th><th>Dokumenttyp</th></tr>
+    </thead>
+    <tbody>
+      {% for entry in manifest %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td>{{ entry.file }}</td>
+        <td><span class="badge badge-neutral">{{ entry.doc_type }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <!-- Threshold-Widget -->
+  <div class="form-group" style="margin-top:16px; max-width:400px;">
+    <label style="font-weight:600; font-size:13px; display:block; margin-bottom:6px;">
+      Presidio Score-Threshold
+      <span style="font-weight:400; color:#888; font-size:12px; margin-left:6px;">
+        (aktuell auf Server)
+      </span>
+    </label>
+    <div style="display:flex; align-items:center; gap:8px;">
+      <button type="button" onclick="changeThreshold(-0.05)"
+              style="width:32px; height:32px; font-size:18px; font-weight:700; border:1px solid #ccc;
+                     border-radius:4px; background:#f5f5f5; cursor:pointer; line-height:1;">−</button>
+      <span id="threshold-display"
+            style="font-size:22px; font-weight:700; min-width:52px; text-align:center; letter-spacing:1px;">
+        …
+      </span>
+      <button type="button" onclick="changeThreshold(+0.05)"
+              style="width:32px; height:32px; font-size:18px; font-weight:700; border:1px solid #ccc;
+                     border-radius:4px; background:#f5f5f5; cursor:pointer; line-height:1;">+</button>
+      <span id="threshold-hint" style="font-size:12px; color:#888; margin-left:4px;"></span>
+    </div>
+    <div style="font-size:11px; color:#aaa; margin-top:4px;">
+      Schritte: 0.05 · Min: 0.10 · Max: 0.95
+    </div>
+  </div>
+
+  <div class="form-group" style="margin-top:12px; max-width:400px;">
+    <label for="config-note" style="font-weight:600; font-size:13px; display:block; margin-bottom:4px;">
+      Konfig-Notiz (wird auto-befuellt)
+    </label>
+    <input type="text" id="config-note" placeholder="z.B. threshold=0.50"
+           style="width:100%; padding:8px 10px; border:1px solid #ccc; border-radius:4px; font-size:13px;">
+  </div>
+
+  <div class="form-actions" style="margin-top:12px;">
+    <button class="btn btn-primary" onclick="startBatch()" id="start-btn">
+      Neue Iteration starten ({{ manifest|length }} PDFs)
+    </button>
+    <a href="/fp-audit" class="btn">FP-Audit</a>
+    <a href="/history" class="btn">Verlauf</a>
+  </div>
+</div>
+
+<div id="batch-status" class="info-box" style="display:none; margin-top:16px;">
+  <div id="status-text" style="font-weight:600; margin-bottom:8px;">Initialisiere...</div>
+  <progress id="progress-bar" value="0" max="100" style="width:100%; height:8px;"></progress>
+  <div id="error-list" style="margin-top:12px;"></div>
+</div>
+
+{% if iterations %}
+<h2 style="margin-top:28px; margin-bottom:8px;">Bisherige Iterationen</h2>
+<table class="history-table">
+  <thead>
+    <tr><th>#</th><th>Zeitpunkt</th><th>Konfig-Notiz</th><th>Status</th><th>Runs</th><th>Gesamt-FP%</th></tr>
+  </thead>
+  <tbody>
+    {% for it in iterations %}
+    <tr>
+      <td>{{ loop.revindex }}</td>
+      <td style="font-size:12px; color:#666;">{{ it.started_at.strftime('%d.%m.%Y %H:%M') }}</td>
+      <td>{{ it.config_note or '—' }}</td>
+      <td>
+        <span class="badge {% if it.status == 'done' %}badge-ok{% elif it.status == 'running' %}badge-warn{% else %}badge-bad{% endif %}">
+          {{ it.status }}
+        </span>
+      </td>
+      <td>{{ it.run_ids|length }}</td>
+      <td>
+        {% if it.fp_summary %}
+          <span class="badge {% if it.fp_summary.fp_rate_pct >= 50 %}badge-bad{% elif it.fp_summary.fp_rate_pct >= 25 %}badge-warn{% else %}badge-ok{% endif %}">
+            {{ it.fp_summary.fp_rate_pct }}%
+          </span>
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<script>
+// ── Threshold-Widget ──
+
+var _threshold = null;
+
+async function loadThreshold() {
+  try {
+    var resp = await fetch('/config/threshold');
+    var data = await resp.json();
+    _threshold = data.score_threshold;
+    renderThreshold();
+  } catch(e) {
+    document.getElementById('threshold-hint').textContent = 'Ladefehler';
+  }
+}
+
+function renderThreshold() {
+  var disp = document.getElementById('threshold-display');
+  var hint = document.getElementById('threshold-hint');
+  if (_threshold === null) return;
+  disp.textContent = _threshold.toFixed(2);
+  // Farb-Hint
+  if (_threshold <= 0.35) {
+    hint.textContent = 'sehr niedrig — viele FP zu erwarten';
+    hint.style.color = '#c62828';
+  } else if (_threshold <= 0.5) {
+    hint.textContent = 'niedrig';
+    hint.style.color = '#e65100';
+  } else if (_threshold <= 0.65) {
+    hint.textContent = 'moderat';
+    hint.style.color = '#2e7d32';
+  } else {
+    hint.textContent = 'hoch — eventuell FN';
+    hint.style.color = '#1565c0';
+  }
+  // Konfig-Notiz auto-befuellen (nur wenn noch leer oder auto-generiert)
+  var noteEl = document.getElementById('config-note');
+  if (!noteEl.dataset.userEdited) {
+    noteEl.value = 'threshold=' + _threshold.toFixed(2);
+  }
+}
+
+async function changeThreshold(delta) {
+  if (_threshold === null) return;
+  var newVal = Math.round((_threshold + delta) * 100) / 100;
+  newVal = Math.max(0.10, Math.min(0.95, newVal));
+  try {
+    var resp = await fetch('/config/threshold', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({score_threshold: newVal})
+    });
+    var data = await resp.json();
+    if (data.ok) {
+      _threshold = data.score_threshold;
+      document.getElementById('config-note').dataset.userEdited = '';
+      renderThreshold();
+    }
+  } catch(e) {
+    document.getElementById('threshold-hint').textContent = 'Speicherfehler: ' + e;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  loadThreshold();
+  // Merken wenn User das Feld selbst bearbeitet
+  var noteEl = document.getElementById('config-note');
+  if (noteEl) {
+    noteEl.addEventListener('input', function() {
+      noteEl.dataset.userEdited = '1';
+    });
+  }
+});
+
+// ── Batch-Start ──
+
+async function startBatch() {
+  var btn = document.getElementById('start-btn');
+  var note = document.getElementById('config-note').value;
+  btn.disabled = true;
+  btn.textContent = 'Laeuft...';
+  document.getElementById('batch-status').style.display = 'block';
+  document.getElementById('status-text').textContent = 'Starte Batch...';
+
+  try {
+    var formData = new FormData();
+    formData.append('config_note', note);
+    var resp = await fetch('/batch/run', {method: 'POST', body: formData});
+    var data = await resp.json();
+    if (!data.ok) {
+      document.getElementById('status-text').textContent = 'Fehler: ' + data.error;
+      btn.disabled = false;
+      btn.textContent = 'Neue Iteration starten ({{ manifest|length }} PDFs)';
+      return;
+    }
+    pollBatch();
+  } catch(e) {
+    document.getElementById('status-text').textContent = 'Netzwerk-Fehler: ' + e;
+    btn.disabled = false;
+    btn.textContent = 'Neue Iteration starten ({{ manifest|length }} PDFs)';
+  }
+}
+
+function pollBatch() {
+  fetch('/batch/status')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var statusEl = document.getElementById('status-text');
+      var progressEl = document.getElementById('progress-bar');
+      var errorsEl = document.getElementById('error-list');
+      if (data.running) {
+        var pct = data.total > 0 ? Math.round((data.done / data.total) * 100) : 0;
+        statusEl.textContent = '(' + data.done + '/' + data.total + ') ' + (data.current || '...');
+        progressEl.value = pct;
+        setTimeout(pollBatch, 3000);
+      } else {
+        progressEl.value = 100;
+        statusEl.textContent = 'Fertig — ' + data.done + ' PDFs verarbeitet. Weiter zu FP-Audit...';
+        document.getElementById('start-btn').disabled = false;
+        document.getElementById('start-btn').textContent = 'Neue Iteration starten ({{ manifest|length }} PDFs)';
+        if (data.errors && data.errors.length > 0) {
+          var html = '<strong style="color:#c62828;">Fehler:</strong><ul style="margin-top:4px;">';
+          for (var i = 0; i < data.errors.length; i++) {
+            html += '<li style="color:#c62828;">' + data.errors[i] + '</li>';
+          }
+          html += '</ul>';
+          errorsEl.innerHTML = html;
+        }
+        setTimeout(function() { window.location.href = '/fp-audit'; }, 2000);
+      }
+    })
+    .catch(function(e) {
+      document.getElementById('status-text').textContent = 'Status-Fehler: ' + e;
+      setTimeout(pollBatch, 5000);
+    });
+}
+</script>
+
+{% endif %}
+{% endblock %}
